@@ -1,6 +1,7 @@
 import pandas as pd
 import time
 import io
+import json
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -11,11 +12,42 @@ from webdriver_manager.chrome import ChromeDriverManager
 import os
 
 # --- NASTAVITVE ---
-USER_NAME = "bojan.leskosek@fsp.uni-lj.si"  # Tukaj vpišite svoje podatke
+USER_NAME = os.environ.get('SLOFIT_USERNAME')  # Tukaj vpišite svoje podatke
 PASSWORD = os.environ.get('SLOFIT_PASS')
 if not PASSWORD:
     raise ValueError("Napaka: Okoljska spremenljivka 'SLOFIT_PASS' ni nastavljena!")
-SQL_QUERY = "SELECT TOP 3 * FROM clan"
+SQL_QUERY = f"""DECLARE @merID INT  = 47894 -- 47894;  -- Meritev.ID
+DECLARE @regijaID INT = 8 -- 8;    -- FitnessMapRegions.ID
+SELECT 
+    m.Datum,
+    im.Naziv AS IzvajalecNaziv,
+    u.PriimekInIme AS Administrator,
+    bt.Ime AS BaterijaTestovIme,
+    fmr.Name AS RegijaName,
+    (  SELECT COUNT(*)
+        FROM Merjenec m1
+        JOIN Clan c1 ON c1.ID = m1.IdClan
+        WHERE m1.IdMeritev = @merID
+          AND EXISTS (
+                SELECT 1
+                FROM Merjenec m2
+                JOIN Meritev me2 ON me2.ID = m2.IdMeritev
+                WHERE m2.IdClan = m1.IdClan
+                  AND me2.BaterijaTestov = 26
+          )
+    ) AS Merjencev
+FROM Meritev m
+    INNER JOIN IzvajalecMeritev im 
+        ON im.ID = m.Izvajalec
+    INNER JOIN Uporabnik u 
+        ON u.ID = m.IdUporabnik
+    INNER JOIN BaterijaTestov bt
+        ON bt.ID = m.BaterijaTestov
+    INNER JOIN FitnessMapRegions fmr
+        ON fmr.ID = @regijaID
+WHERE m.ID = @merID;
+"""
+
 
 chrome_options = Options()
 # chrome_options.add_argument("--headless") # Zaženi brez vidnega okna (ko vse deluje)
@@ -75,18 +107,18 @@ try:
 # 6. Vnos poizvedbe neposredno v CodeMirror urejevalnik
     print("Vpisujem SQL poizvedbo v napredni urejevalnik...")
     
-    poizvedba = "SELECT TOP 3 * FROM clan"
+    poizvedba = SQL_QUERY
     
     try:
         # KLJUČNI POPRAVEK: Čakamo, da se CodeMirror element dejansko pojavi na strani
         # Čakamo do 20 sekund na element z razredom 'CodeMirror'
         wait.until(EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror")))
         print("CodeMirror zaznan, vpisujem...")
-
+        poizvedba_js = SQL_QUERY.replace("\\", "\\\\").replace("\n", "\\n")
         # Ta JS koda poišče CodeMirror instanco na strani in ji vnese tekst
         js_vpis = f"""
         var editor = document.querySelector('.CodeMirror').CodeMirror;
-        editor.setValue('{poizvedba}');
+        editor.setValue('{poizvedba_js}');
         editor.save(); 
         """
         driver.execute_script(js_vpis)
