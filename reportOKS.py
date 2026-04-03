@@ -72,27 +72,38 @@ try:
     # 5. Preklop na SQL stran
     driver.get("https://moj.slofit.org/Moj-SLOfit/sql")
     
-   
 # 6. Vnos poizvedbe neposredno v CodeMirror urejevalnik
     print("Vpisujem SQL poizvedbo v napredni urejevalnik...")
     
     poizvedba = "SELECT TOP 3 * FROM clan"
     
-    # Ta JS koda poišče CodeMirror instanco na strani in ji vnese tekst
-    js_vpis = f"""
-    var editor = document.querySelector('.CodeMirror').CodeMirror;
-    editor.setValue('{poizvedba}');
-    editor.save(); // To prekopira tekst nazaj v skriti textarea za form submit
-    """
-    
     try:
+        # KLJUČNI POPRAVEK: Čakamo, da se CodeMirror element dejansko pojavi na strani
+        # Čakamo do 20 sekund na element z razredom 'CodeMirror'
+        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror")))
+        print("CodeMirror zaznan, vpisujem...")
+
+        # Ta JS koda poišče CodeMirror instanco na strani in ji vnese tekst
+        js_vpis = f"""
+        var editor = document.querySelector('.CodeMirror').CodeMirror;
+        editor.setValue('{poizvedba}');
+        editor.save(); 
+        """
         driver.execute_script(js_vpis)
         print("Vrednost vpisana v CodeMirror.")
+
     except Exception as e:
-        print("CodeMirror ni bil najden, poskušam klasičen vpis v textarea...")
-        # Rezervni načrt, če ni CodeMirrora
-        sql_input = driver.find_element(By.NAME, "dnn$ctr1155$SQL$txtQuery")
-        driver.execute_script("arguments[0].value = arguments[1];", sql_input, poizvedba)
+        print(f"CodeMirror ni bil najden ali pripravljen: {e}")
+        print("Poskušam klasičen vpis v textarea...")
+        
+        # Rezervni načrt: Čakamo na textarea, če CodeMirrora slučajno ni
+        try:
+            sql_input = wait.until(EC.presence_of_element_located((By.NAME, "dnn$ctr1155$SQL$txtQuery")))
+            driver.execute_script("arguments[0].value = arguments[1];", sql_input, poizvedba)
+        except:
+            print("Tudi klasično polje ni bilo najdeno. Preveri, če se je stran pravilno naložila.")
+            raise  # Ponovno sproži napako, da vemo, kje se je ustavilo
+
 
     # 7. Klik na 'Run Script' 
     time.sleep(1)
@@ -115,7 +126,7 @@ try:
         print(f"\nPridobljeno {len(df)} vrstic.")
         
         filename = "SLOfit_OKS_Izvoz.xlsx"
-        df.to_excel(filename, index=False)
+        #df.to_excel(filename, index=False)
         print(f"Podatki so shranjeni v: {filename}")
     else:
         print("Napaka: Tabela ni bila najdena.")
