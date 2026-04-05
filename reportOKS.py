@@ -1,7 +1,6 @@
 import pandas as pd
 import time
 import io
-import json
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -12,42 +11,11 @@ from webdriver_manager.chrome import ChromeDriverManager
 import os
 
 # --- NASTAVITVE ---
-USER_NAME = os.environ.get('SLOFIT_USERNAME')  # Tukaj vpišite svoje podatke
+USER_NAME = "bojan.leskosek@fsp.uni-lj.si"  # Tukaj vpišite svoje podatke
 PASSWORD = os.environ.get('SLOFIT_PASS')
 if not PASSWORD:
     raise ValueError("Napaka: Okoljska spremenljivka 'SLOFIT_PASS' ni nastavljena!")
-SQL_QUERY = f"""DECLARE @merID INT  = 47894 -- 47894;  -- Meritev.ID
-DECLARE @regijaID INT = 8 -- 8;    -- FitnessMapRegions.ID
-SELECT 
-    m.Datum,
-    im.Naziv AS IzvajalecNaziv,
-    u.PriimekInIme AS Administrator,
-    bt.Ime AS BaterijaTestovIme,
-    fmr.Name AS RegijaName,
-    (  SELECT COUNT(*)
-        FROM Merjenec m1
-        JOIN Clan c1 ON c1.ID = m1.IdClan
-        WHERE m1.IdMeritev = @merID
-          AND EXISTS (
-                SELECT 1
-                FROM Merjenec m2
-                JOIN Meritev me2 ON me2.ID = m2.IdMeritev
-                WHERE m2.IdClan = m1.IdClan
-                  AND me2.BaterijaTestov = 26
-          )
-    ) AS Merjencev
-FROM Meritev m
-    INNER JOIN IzvajalecMeritev im 
-        ON im.ID = m.Izvajalec
-    INNER JOIN Uporabnik u 
-        ON u.ID = m.IdUporabnik
-    INNER JOIN BaterijaTestov bt
-        ON bt.ID = m.BaterijaTestov
-    INNER JOIN FitnessMapRegions fmr
-        ON fmr.ID = @regijaID
-WHERE m.ID = @merID;
-"""
-
+SQL_QUERY = "SELECT TOP 3 * FROM clan"
 
 chrome_options = Options()
 # chrome_options.add_argument("--headless") # Zaženi brez vidnega okna (ko vse deluje)
@@ -107,18 +75,18 @@ try:
 # 6. Vnos poizvedbe neposredno v CodeMirror urejevalnik
     print("Vpisujem SQL poizvedbo v napredni urejevalnik...")
     
-    poizvedba = SQL_QUERY
+    poizvedba = "SELECT TOP 55 * FROM clan"
     
     try:
         # KLJUČNI POPRAVEK: Čakamo, da se CodeMirror element dejansko pojavi na strani
         # Čakamo do 20 sekund na element z razredom 'CodeMirror'
         wait.until(EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror")))
         print("CodeMirror zaznan, vpisujem...")
-        poizvedba_js = SQL_QUERY.replace("\\", "\\\\").replace("\n", "\\n")
+
         # Ta JS koda poišče CodeMirror instanco na strani in ji vnese tekst
         js_vpis = f"""
         var editor = document.querySelector('.CodeMirror').CodeMirror;
-        editor.setValue('{poizvedba_js}');
+        editor.setValue('{poizvedba}');
         editor.save(); 
         """
         driver.execute_script(js_vpis)
@@ -146,22 +114,59 @@ try:
 
     print("Poizvedba poslana...")
 
-    # 8. Čakanje na tabelo in branje
+# 8. Čakanje na tabelo in preverjanje dolžine (stranjenje)
+    print("Čakam na izris rezultatov...")
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-    time.sleep(3) # Dodaten čas za izris vsebine
-    
+    time.sleep(2)  # Kratek premor, da se naloži še DataTables vrstica
+
+    try:
+        # Preverimo, če je gumb 'Next' aktiven (nima razreda 'disabled')
+        # XPath išče element, ki ima razred 'next', nima pa razreda 'disabled'
+        next_button_xpath = "//a[contains(@class, 'next') and not(contains(@class, 'disabled'))]"
+        
+        is_paginated = len(driver.find_elements(By.XPATH, next_button_xpath)) > 0
+
+        if is_paginated:
+            print("Zaznanih več kot 50 vrstic. Preklapljam na prikaz 'All'...")
+            
+            # Najdemo dropdown za izbiro dolžine (iščemo po imenu, ki se konča na _length)
+            from selenium.webdriver.support.ui import Select
+            length_dropdown = driver.find_element(By.XPATH, "//select[contains(@name, '_length')]")
+            
+            select = Select(length_dropdown)
+            # Izberemo možnost 'All', ki ima vrednost '-1'
+            select.select_by_value("-1")
+            
+            print("Čakam, da se naložijo vsi podatki...")
+            # Počakamo par sekund, da se tabela osveži z vsemi vrsticami
+            time.sleep(4) 
+        else:
+            print("Vsi podatki so že vidni (manj kot 50 vrstic).")
+
+    except Exception as e:
+        print(f"Opomba pri preverjanju strani: {e}")
+        # Nadaljujemo tudi če preklop spodleti, da vsaj shranimo kar je na voljo
+
+    # Dejansko branje tabele v Pandas
     html_buffer = io.StringIO(driver.page_source)
     tables = pd.read_html(html_buffer)
     
     if tables:
-        df = max(tables, key=len) # Izberi tabelo z največ podatki
-        print(f"\nPridobljeno {len(df)} vrstic.")
+        # Vedno izberemo tabelo z največ vrsticami
+        df = max(tables, key=len) 
         
-        filename = "SLOfit_OKS_Izvoz.xlsx"
-        #df.to_excel(filename, index=False)
+        # Odstranimo zadnjo vrstico, če Pandas po pomoti prebere 'Previous 1 2 Next' kot podatke
+        if "Next" in str(df.iloc[-1].values):
+            df = df.iloc[:-1]
+
+        print(f"\nUspeh! Skupaj pridobljenih {len(df)} vrstic.")
+        
+        filename = "SLOfit_OKS_Celoten_Izvoz.xlsx"
+        df.to_excel(filename, index=False)
         print(f"Podatki so shranjeni v: {filename}")
     else:
         print("Napaka: Tabela ni bila najdena.")
+
 
 except Exception as e:
     print(f"\nPrišlo je do napake: {e}")
