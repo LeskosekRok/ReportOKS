@@ -1,24 +1,50 @@
 import pandas as pd
 import time
 import io
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select
 from webdriver_manager.chrome import ChromeDriverManager
-import os
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches
+import matplotlib.pyplot as plt
 
 # --- NASTAVITVE ---
-USER_NAME = os.environ.get('SLOFIT_USERNAME')  # Tukaj vpišite svoje podatke
+USER_NAME = os.environ.get('SLOFIT_USERNAME')
 PASSWORD = os.environ.get('SLOFIT_PASS')
 if not PASSWORD:
     raise ValueError("Napaka: Okoljska spremenljivka 'SLOFIT_PASS' ni nastavljena!")
-SQL_QUERY = f"""DECLARE @merID INT  = 47894 -- 47894;  -- Meritev.ID
-DECLARE @regijaID INT = 8 -- 8;    -- FitnessMapRegions.ID
+
+# --- PREBERI EXCEL ---
+file_path = "reportOKSanaliza.xlsx"
+df_analize = pd.read_excel(file_path, sheet_name="Analize")
+df_centili = pd.read_excel(file_path, sheet_name="Centili")
+
+# --- VNOS ANALIZE ---
+analiza_id = input("Vnesi številko analize (Meritev.id): ")
+analiza_id = int(analiza_id)
+rezultat = df_analize[df_analize["Meritev.id"] == analiza_id]
+
+if not rezultat.empty:
+    vrstica = rezultat.iloc[0]
+    ID = vrstica["ID"]
+    Meritev_id = vrstica["Meritev.id"]
+    Regija_id = vrstica["Regija.id"]
+    ReportDocName = vrstica["ReportDocName"]
+    Opomba = vrstica["Opomba"]
+else:
+    raise ValueError("Analiza ni bila najdena.")
+
+# --- SQL POIZVEDBA 1 ---
+SQL_QUERY_1 = f"""
+DECLARE @merID INT  = {Meritev_id}
+DECLARE @regijaID INT = {Regija_id}
+
 SELECT 
     m.Datum,
     im.Naziv AS IzvajalecNaziv,
@@ -49,192 +75,191 @@ FROM Meritev m
 WHERE m.ID = @merID;
 """
 
-chrome_options = Options()
-# chrome_options.add_argument("--headless") # Zaženi brez vidnega okna (ko vse deluje)
+# --- SQL POIZVEDBA 2 ---
+SQL_QUERY_2 = f"""
+DECLARE @merID INT = {Meritev_id};
 
+SELECT
+    te.Ime AS TestIme,
+    AVG(r.CentilniRang1) AS Povprecje
+FROM Merjenec m
+JOIN Clan c ON c.ID = m.IdClan
+JOIN Rezultat r ON r.IdMerjenec = m.ID
+JOIN Test te ON te.ID = r.IdTest
+WHERE r.CentilniRang1 IS NOT NULL
+AND EXISTS (
+    SELECT 1
+    FROM Meritev me2
+    JOIN Merjenec m2 ON me2.ID = m2.IdMeritev
+    WHERE m2.IdClan = m.IdClan
+      AND me2.BaterijaTestov = 26
+)
+AND m.IdMeritev = @merID
+GROUP BY te.Ime
+ORDER BY te.Ime;
+"""
+
+# --- SELENIUM PRIJAVA ---
+chrome_options = Options()
+# chrome_options.add_argument("--headless")  # Odkomentiraj za headless
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 wait = WebDriverWait(driver, 20)
 
-try:
-    # 1. Odpri prijavno stran
-    print("Odpiram prijavo na Moj-SLOfit...")
-    driver.get("https://moj.slofit.org/")
-    
-    # 2. Vpis uporabniškega imena
-    user_field = wait.until(EC.presence_of_element_located((By.ID, "dnn_ctr543_View_ctlWrapper1_ctlLogin1_ctlUserName_txtTextBox")))
-    user_field.clear()
-    user_field.send_keys(USER_NAME)
-    
-    # 3. Vpis gesla
-    pass_field = driver.find_element(By.ID, "dnn_ctr543_View_ctlWrapper1_ctlLogin1_ctlPassword_txtTextBox")
-    pass_field.clear()
-    pass_field.send_keys(PASSWORD)
-    
-  
-
-# 4. Klik na gumb za prijavo
-    print("Iščem gumb PRIJAVA...")
-    
-    try:
-        # Iščemo gumb, ki ima v besedilu 'PRIJAVA' (velike črke) 
-        # ali 'Prijava' ali 'prijava' (uporabimo translate za "case-insensitive" iskanje)
-        login_button = wait.until(EC.element_to_be_clickable((By.XPATH, 
-            "//a[contains(translate(text(), 'prijava', 'PRIJAVA'), 'PRIJAVA')] | "
-            "//input[contains(translate(@value, 'prijava', 'PRIJAVA'), 'PRIJAVA')] | "
-            "//*[contains(@id, 'btnSubmit')]"
-        )))
-        
-        # Uporabimo JavaScript klik, da preprečimo 'ElementClickIntercepted' napake
-        driver.execute_script("arguments[0].click();", login_button)
-        print("Gumb PRIJAVA uspešno pritisnjen.")
-        
-    except Exception as e:
-        print(f"Gumba ni bilo mogoče klikniti: {e}")
-        # Če zgornje ne dela, poskusiva še najbolj direkten XPath za ta gumb:
-        login_button = driver.find_element(By.XPATH, "//a[@id='dnn_ctr543_View_ctlWrapper1_ctlLogin1_btnSubmit']")
-        driver.execute_script("arguments[0].click();", login_button)
-
-
-    
-    # Počakamo, da se pojavi napis 'Pozdravljeni!', kar potrdi uspešno prijavo
-    wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Pozdravljeni!')]")))
-    print("Prijava uspešna.")
-
-    # 5. Preklop na SQL stran
+def run_sql_and_get_table(sql_query):
+    """Funkcija za izvedbo SQL poizvedbe preko spletnega UI in vračanje Pandas DataFrame."""
     driver.get("https://moj.slofit.org/Moj-SLOfit/sql")
-    
-# 6. Vnos poizvedbe neposredno v CodeMirror urejevalnik
-    print("Vpisujem SQL poizvedbo v napredni urejevalnik...")
-    
-    poizvedba = SQL_QUERY
-    
-    try:
-        # KLJUČNI POPRAVEK: Čakamo, da se CodeMirror element dejansko pojavi na strani
-        # Čakamo do 20 sekund na element z razredom 'CodeMirror'
-        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror")))
-        print("CodeMirror zaznan, vpisujem...")
-        poizvedba_js = SQL_QUERY.replace("\\", "\\\\").replace("\n", "\\n")
-        # Ta JS koda poišče CodeMirror instanco na strani in ji vnese tekst
-        js_vpis = f"""
-        var editor = document.querySelector('.CodeMirror').CodeMirror;
-        editor.setValue('{poizvedba_js}');
-        editor.save(); 
-        """
-        driver.execute_script(js_vpis)
-        print("Vrednost vpisana v CodeMirror.")
-
-    except Exception as e:
-        print(f"CodeMirror ni bil najden ali pripravljen: {e}")
-        print("Poskušam klasičen vpis v textarea...")
-        
-        # Rezervni načrt: Čakamo na textarea, če CodeMirrora slučajno ni
-        try:
-            sql_input = wait.until(EC.presence_of_element_located((By.NAME, "dnn$ctr1155$SQL$txtQuery")))
-            driver.execute_script("arguments[0].value = arguments[1];", sql_input, poizvedba)
-        except:
-            print("Tudi klasično polje ni bilo najdeno. Preveri, če se je stran pravilno naložila.")
-            raise  # Ponovno sproži napako, da vemo, kje se je ustavilo
-
-
-    # 7. Klik na 'Run Script' 
+    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror")))
+    js_query = sql_query.replace("\\", "\\\\").replace("\n", "\\n")
+    driver.execute_script(f"""
+    var editor = document.querySelector('.CodeMirror').CodeMirror;
+    editor.setValue('{js_query}');
+    editor.save();
+    """)
     time.sleep(1)
     run_button = wait.until(EC.presence_of_element_located((By.ID, "dnn_ctr1155_SQL_cmdExecute")))
     driver.execute_script("arguments[0].click();", run_button)
-    
-    print("Gumb 'Run Script' pritisnjen.")
-
-    print("Poizvedba poslana...")
-
-# 8. Čakanje na tabelo in preverjanje dolžine (stranjenje)
-    print("Čakam na izris rezultatov...")
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-    time.sleep(2)  # Kratek premor, da se naloži še DataTables vrstica
-
-    try:
-        # Preverimo, če je gumb 'Next' aktiven (nima razreda 'disabled')
-        # XPath išče element, ki ima razred 'next', nima pa razreda 'disabled'
-        next_button_xpath = "//a[contains(@class, 'next') and not(contains(@class, 'disabled'))]"
-        
-        is_paginated = len(driver.find_elements(By.XPATH, next_button_xpath)) > 0
-
-        if is_paginated:
-            print("Zaznanih več kot 50 vrstic. Preklapljam na prikaz 'All'...")
-            
-            # Najdemo dropdown za izbiro dolžine (iščemo po imenu, ki se konča na _length)
-            from selenium.webdriver.support.ui import Select
-            length_dropdown = driver.find_element(By.XPATH, "//select[contains(@name, '_length')]")
-            
-            select = Select(length_dropdown)
-            # Izberemo možnost 'All', ki ima vrednost '-1'
-            select.select_by_value("-1")
-            
-            print("Čakam, da se naložijo vsi podatki...")
-            # Počakamo par sekund, da se tabela osveži z vsemi vrsticami
-            time.sleep(4) 
-        else:
-            print("Vsi podatki so že vidni (manj kot 50 vrstic).")
-
-    except Exception as e:
-        print(f"Opomba pri preverjanju strani: {e}")
-        # Nadaljujemo tudi če preklop spodleti, da vsaj shranimo kar je na voljo
-
-    # Dejansko branje tabele v Pandas
+    time.sleep(2)
     html_buffer = io.StringIO(driver.page_source)
     tables = pd.read_html(html_buffer)
-    
     if tables:
-        # Vedno izberemo tabelo z največ vrsticami
-        df = max(tables, key=len) 
-        
-        # Odstranimo zadnjo vrstico, če Pandas po pomoti prebere 'Previous 1 2 Next' kot podatke
-        if "Next" in str(df.iloc[-1].values):
-            df = df.iloc[:-1]
-
-        print(f"\nUspeh! Skupaj pridobljenih {len(df)} vrstic.")
-        
-        filename = "reportOKSanaliza.xlsx"
-        df.to_excel(filename, index=False)
-        print(f"Podatki so shranjeni v: {filename}")
-        print("Ustvarjam DOCX poročilo...")
-
-        # Preberemo Excel
-        df_doc = pd.read_excel(filename)
-
-        # Vzamemo drugo vrstico (index 0 = header, 1 = podatki)
-        row = df_doc.iloc[0]
-
-        # Ustvarimo dokument
-        doc = Document()
-
-        # Naslovi
-        doc.add_heading('Uvodna stran', level=1)
-        doc.add_heading('Analitično poročilo za meritev Zmigaj se do vadbe', level=2)
-        doc.add_heading('Osnovni podatki o meritvi', level=3)
-
-        # Prazna vrstica
-        doc.add_paragraph("")
-
-        # Podatki
-        doc.add_paragraph(f"Datum meritev: {row['Datum']}")
-        doc.add_paragraph(f"Izvajalec meritev: {row['IzvajalecNaziv']}")
-        doc.add_paragraph(f"Administrator: {row['Administrator']}")
-        doc.add_paragraph(f"Testna baterija: {row['BaterijaTestovIme']}")
-        doc.add_paragraph(f"Regija (za primerjavo): {row['RegijaName']}")
-        doc.add_paragraph(f"Število udeležencev ZV: {row['Merjencev']}")
-
-        # Shrani DOCX v isto mapo
-        docx_filename = os.path.join(os.getcwd(), "reportOKSanaliza.docx")
-        doc.save(docx_filename)
-
-        print(f"DOCX poročilo shranjeno v: {docx_filename}")
+        df_res = max(tables, key=len)
+        if "Next" in str(df_res.iloc[-1].values):
+            df_res = df_res.iloc[:-1]
+        return df_res
     else:
-        print("Napaka: Tabela ni bila najdena.")
+        return pd.DataFrame()
 
+try:
+    # --- Prijava ---
+    driver.get("https://moj.slofit.org/")
 
-except Exception as e:
-    print(f"\nPrišlo je do napake: {e}")
+    # Vpis uporabniškega imena
+    user_field = wait.until(EC.presence_of_element_located(
+        (By.ID, "dnn_ctr543_View_ctlWrapper1_ctlLogin1_ctlUserName_txtTextBox")))
+    user_field.clear()
+    user_field.send_keys(USER_NAME)
+
+    # Vpis gesla
+    pass_field = wait.until(EC.presence_of_element_located(
+        (By.ID, "dnn_ctr543_View_ctlWrapper1_ctlLogin1_ctlPassword_txtTextBox")))
+    pass_field.clear()
+    pass_field.send_keys(PASSWORD)
+
+    # Klik na gumb PRIJAVA
+    login_button = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, "//a[contains(text(),'PRIJAVA')] | //input[@value='PRIJAVA']")))
+    driver.execute_script("arguments[0].click();", login_button)
+
+    # Čakamo na pozdravno sporočilo
+    wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Pozdravljeni!')]")))
+    
+    # --- SQL 1 ---
+    df_sql1 = run_sql_and_get_table(SQL_QUERY_1)
+    if df_sql1.empty:
+        raise ValueError("SQL poizvedba 1 ni vrnila podatkov.")
+    row = df_sql1.iloc[0]
+
+    # --- SQL 2 ---
+    df_sql2 = run_sql_and_get_table(SQL_QUERY_2)
+    if df_sql2.empty:
+        raise ValueError("SQL poizvedba 2 ni vrnila podatkov.")
 
 finally:
-    print("\nPostopek zaključen. Brskalnik ostaja odprt za pregled.")
-    # driver.quit() # Odkomentiraj za samodejno zapiranje
+    driver.quit()
+
+# --- PRIPRAVA TABELE ZA DOCX ---
+
+
+def place_decimal_and_round(number):
+   
+    
+    num_str = str(number)
+    
+    
+    
+    
+    new_num = float(num_str[:2] + '.' + num_str[2:])
+    
+    
+    return round(new_num, 1)
+
+
+# --- PRIPRAVA TABELE ---
+df_table = pd.DataFrame()
+df_table["Test"] = df_sql2["TestIme"]
+df_sql2["Povprecje"] = df_sql2["Povprecje"].apply(place_decimal_and_round)
+df_table["ZmigajSdv"] = df_sql2["Povprecje"]
+
+df_table["Osrednjeslovenska"] = df_centili[df_centili["Geo_enota"] == "Osrednjeslovenska"]["CentilXA"].values[:len(df_table)]
+
+df_table["Slovenija"] = df_centili[df_centili["Geo_enota"] == "Slovenija"]["CentilXA"].values[:len(df_table)]
+
+# --- USTVARJANJE DOCX ---
+doc = Document()
+doc.add_heading('Analitično poročilo za meritev Zmigaj se do vadbe', level=1)
+doc.add_heading('Osnovni podatki o meritvi', level=2)
+doc.add_paragraph("")
+doc.add_paragraph(f"Datum meritev: {row['Datum']}")
+doc.add_paragraph(f"Izvajalec meritev: {row['IzvajalecNaziv']}")
+doc.add_paragraph(f"Administrator: {row['Administrator']}")
+doc.add_paragraph(f"Testna baterija: {row['BaterijaTestovIme']}")
+doc.add_paragraph(f"Regija (za primerjavo): {row['RegijaName']}")
+doc.add_paragraph(f"Število udeležencev ZV: {row['Merjencev']}")
+doc.add_paragraph("")
+
+# --- TABELA ---
+doc.add_heading('Povprečni centili po testih', level=2)
+table = doc.add_table(rows=1, cols=len(df_table.columns))
+table.style = 'Table Grid'
+
+# Glava
+hdr_cells = table.rows[0].cells
+for i, col_name in enumerate(df_table.columns):
+    hdr_cells[i].text = col_name
+
+# Vrstice
+for idx, r in df_table.iterrows():
+    row_cells = table.add_row().cells
+    for i, col_name in enumerate(df_table.columns):
+        row_cells[i].text = str(round(r[col_name], 2)) if isinstance(r[col_name], (int,float)) else str(r[col_name])
+
+doc.add_paragraph("")
+
+# --- GRAF ---
+plt.figure(figsize=(8,4))
+
+x = df_table["Test"]
+
+y1 = df_table["ZmigajSdv"] - 50
+y2 = df_table["Osrednjeslovenska"] - 50
+y3 = df_table["Slovenija"] - 50
+
+positions = list(range(len(x)))
+
+plt.bar([p-0.2 for p in positions], y1, width=0.2, label="ZmigajSdv")
+plt.bar(positions, y2, width=0.2, label="Osrednjeslovenska")
+plt.bar([p+0.2 for p in positions], y3, width=0.2, label="Slovenija")
+
+# OSI
+plt.ylabel("Povprečni centil")
+plt.ylim(-50, 50)
+plt.yticks([-50, -25, 0, 25, 50], [0, 25, 50, 75, 100])
+
+# sredina = 50
+plt.axhline(0, linestyle='--')
+
+plt.xticks(positions, x, rotation=45, ha='right')
+plt.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
+plt.tight_layout()
+
+
+graf_path = os.path.join(os.getcwd(), "graf.png")
+plt.savefig(graf_path)
+plt.close()
+doc.add_picture(graf_path, width=Inches(6))
+
+# --- SHRANJEVALNJE DOCX ---
+docx_filename = os.path.join(os.getcwd(), ReportDocName + ".docx")
+doc.save(docx_filename)
+print(f"DOCX poročilo shranjeno v: {docx_filename}")
