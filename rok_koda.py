@@ -259,6 +259,58 @@ plt.savefig(graf_path)
 plt.close()
 doc.add_picture(graf_path, width=Inches(6))
 
+# --- PREBERI REGIJO ---
+df_regija = pd.read_excel(file_path, sheet_name="Regije")
+
+regija_row = df_regija[df_regija["ID"] == Regija_id]
+
+if regija_row.empty:
+    raise ValueError("Regija ni bila najdena.")
+
+regija_name = regija_row.iloc[0]["Name"]
+
+# --- PREBERI CONE ---
+df_cone = pd.read_excel(file_path, sheet_name="Cone")
+
+df_cone_regija = df_cone[df_cone["Geo_enota"] == regija_name]
+
+if df_cone_regija.empty:
+    raise ValueError("Ni podatkov za izbrano regijo v listu Cone.")
+
+# --- PRIPRAVA PODATKOV ---
+testi = df_cone_regija["Test"]
+tvegani = df_cone_regija.iloc[:, 8] * 100
+mejni = df_cone_regija.iloc[:, 7] * 100
+
+# --- GRAF 2 (STACKED BAR) ---
+plt.figure(figsize=(8,4))
+
+positions = list(range(len(testi)))
+
+# rdeči del (tvegani)
+plt.bar(positions, tvegani, label="Tvegani")
+
+# rumeni del (mejni) NAD rdečim
+plt.bar(positions, mejni, bottom=tvegani, label="Mejni")
+
+# osi
+plt.xticks(positions, testi, rotation=45, ha='right')
+plt.ylabel("Procent (%)")
+plt.ylim(0, 100)
+
+plt.legend()
+plt.tight_layout()
+
+# shrani
+graf2_path = os.path.join(os.getcwd(), "graf_cone.png")
+plt.savefig(graf2_path)
+plt.close()
+
+# dodaj v DOCX
+doc.add_page_break()
+doc.add_heading('Delež mejnih in tveganih rezultatov po testih', level=2)
+doc.add_picture(graf2_path, width=Inches(6))
+
 # --- SHRANJEVALNJE DOCX ---
 docx_filename = os.path.join(os.getcwd(), ReportDocName + ".docx")
 doc.save(docx_filename)
