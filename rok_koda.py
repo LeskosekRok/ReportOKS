@@ -98,7 +98,24 @@ AND m.IdMeritev = @merID
 GROUP BY te.Ime
 ORDER BY te.Ime;
 """
+SQL_QUERY_3 = f"""
+DECLARE @merID INT = {Meritev_id};
 
+SELECT
+    te.Ime AS TestIme,
+    SUM(CASE WHEN r.ConaBarva = '#9ac263' THEN 1 ELSE 0 END) AS Zdravo,
+    SUM(CASE WHEN r.ConaBarva = '#ffd54e' THEN 1 ELSE 0 END) AS Mejno,
+    SUM(CASE WHEN r.ConaBarva = '#df3127' THEN 1 ELSE 0 END) AS Tvegano
+FROM Merjenec m
+JOIN Clan c ON c.ID = m.IdClan
+JOIN Rezultat r ON r.IdMerjenec = m.ID
+JOIN Test te ON te.ID = r.IdTest
+WHERE
+    m.IdMeritev = @merID
+    AND r.ConaBarva IN ('#9ac263', '#df3127', '#ffd54e')
+GROUP BY te.Ime
+ORDER BY te.Ime;
+"""
 # --- SELENIUM PRIJAVA ---
 chrome_options = Options()
 # chrome_options.add_argument("--headless")  # Odkomentiraj za headless
@@ -110,10 +127,13 @@ def run_sql_and_get_table(sql_query):
     """Funkcija za izvedbo SQL poizvedbe preko spletnega UI in vračanje Pandas DataFrame."""
     driver.get("https://moj.slofit.org/Moj-SLOfit/sql")
     wait.until(EC.presence_of_element_located((By.CLASS_NAME, "CodeMirror")))
-    js_query = sql_query.replace("\\", "\\\\").replace("\n", "\\n")
+    import json
+
+    js_query = json.dumps(sql_query)
+
     driver.execute_script(f"""
     var editor = document.querySelector('.CodeMirror').CodeMirror;
-    editor.setValue('{js_query}');
+    editor.setValue({js_query});
     editor.save();
     """)
     time.sleep(1)
@@ -164,6 +184,12 @@ try:
     df_sql2 = run_sql_and_get_table(SQL_QUERY_2)
     if df_sql2.empty:
         raise ValueError("SQL poizvedba 2 ni vrnila podatkov.")
+    # --- SQL 3 ----
+    df_sql3 = run_sql_and_get_table(SQL_QUERY_3)
+
+    if df_sql3.empty:
+        raise ValueError("SQL poizvedba 3 ni vrnila podatkov.")
+    print(df_sql3)
 
 finally:
     driver.quit()
@@ -278,27 +304,108 @@ if df_cone_regija.empty:
     raise ValueError("Ni podatkov za izbrano regijo v listu Cone.")
 
 # --- PRIPRAVA PODATKOV ---
-testi = df_cone_regija["Test"]
-tvegani = df_cone_regija.iloc[:, 8] * 100
-mejni = df_cone_regija.iloc[:, 7] * 100
+# --- REGIJA ---
+df_cone_regija = df_cone_regija.rename(columns={"Test": "TestIme"})
+df_cone_regija["Regija_Tvegani"] = df_cone_regija.iloc[:, 8] * 100
+df_cone_regija["Regija_Mejni"] = df_cone_regija.iloc[:, 7] * 100
 
+# --- SLOVENIJA ---
+df_cone_slo = df_cone[df_cone["Geo_enota"] == "Slovenija"]
+df_cone_slo = df_cone_slo.rename(columns={"Test": "TestIme"})
+df_cone_slo["Slo_Tvegani"] = df_cone_slo.iloc[:, 8] * 100
+df_cone_slo["Slo_Mejni"] = df_cone_slo.iloc[:, 7] * 100
+
+# --- ANALIZA ---
+df_sql3["Skupaj"] = df_sql3[["Zdravo", "Mejno", "Tvegano"]].sum(axis=1)
+
+df_sql3["Analiza_Tvegani"] = df_sql3.apply(
+    lambda r: (r["Tvegano"] / r["Skupaj"] * 100) if r["Skupaj"] > 0 else 0,
+    axis=1
+)
+
+df_sql3["Analiza_Mejni"] = df_sql3.apply(
+    lambda r: (r["Mejno"] / r["Skupaj"] * 100) if r["Skupaj"] > 0 else 0,
+    axis=1
+)
+
+# --- MERGE V ENO TABELO ---
+df_plot = df_sql3.merge(
+    df_cone_regija[["TestIme", "Regija_Tvegani", "Regija_Mejni"]],
+    on="TestIme",
+    how="left"
+).merge(
+    df_cone_slo[["TestIme", "Slo_Tvegani", "Slo_Mejni"]],
+    on="TestIme",
+    how="left"
+)
+
+
+# --- PODATKI ZA GRAF ---
+testi = df_plot["TestIme"]
+
+analiza_tvegani = df_plot["Analiza_Tvegani"]
+analiza_mejni = df_plot["Analiza_Mejni"]
+
+slo_tvegani = df_plot["Slo_Tvegani"]
+slo_mejni = df_plot["Slo_Mejni"]
 # --- GRAF 2 (STACKED BAR) ---
-plt.figure(figsize=(8,4))
+plt.figure(figsize=(10,5))
 
 positions = list(range(len(testi)))
+width = 0.25
 
-# rdeči del (tvegani)
-plt.bar(positions, tvegani, label="Tvegani")
+# --- ANALIZA (levo) ---
+plt.bar([p - width for p in positions],
+        analiza_tvegani,
+        width=width,
+        color='#df3127',
+        label="Tvegano (analiza)")
 
-# rumeni del (mejni) NAD rdečim
-plt.bar(positions, mejni, bottom=tvegani, label="Mejni")
+plt.bar([p - width for p in positions],
+        analiza_mejni,
+        bottom=analiza_tvegani,
+        width=width,
+        color='#ffd54e',
+        label="Mejno (analiza)")
+
+# --- REGIJA (sredina) ---
+plt.bar(positions,
+        df_plot["Regija_Tvegani"],
+        width=width,
+        color='#df3127',   # rdeča
+        alpha=0.7,
+        label="Tvegano (regija)")
+
+plt.bar(positions,
+        df_plot["Regija_Mejni"],
+        bottom=df_plot["Regija_Tvegani"],
+        width=width,
+        color='#ffd54e',   # rumena
+        alpha=0.7,
+        label="Mejno (regija)")
+
+# --- SLOVENIJA (desno) ---
+plt.bar([p + width for p in positions],
+        slo_tvegani,
+        width=width,
+        color='#df3127',   # rdeča
+        alpha=0.4,
+        label="Tvegano (Slovenija)")
+
+plt.bar([p + width for p in positions],
+        slo_mejni,
+        bottom=slo_tvegani,
+        width=width,
+        color='#ffd54e',   # rumena
+        alpha=0.4,
+        label="Mejno (Slovenija)")
 
 # osi
 plt.xticks(positions, testi, rotation=45, ha='right')
-plt.ylabel("Procent (%)")
+plt.ylabel("Odstotek")
 plt.ylim(0, 100)
 
-plt.legend()
+plt.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
 plt.tight_layout()
 
 # shrani
