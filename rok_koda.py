@@ -189,7 +189,6 @@ try:
 
     if df_sql3.empty:
         raise ValueError("SQL poizvedba 3 ni vrnila podatkov.")
-    print(df_sql3)
 
 finally:
     driver.quit()
