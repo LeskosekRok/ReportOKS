@@ -12,7 +12,9 @@ from selenium.webdriver.support.ui import Select
 from webdriver_manager.chrome import ChromeDriverManager
 from docx import Document
 from docx.shared import Pt, Inches
+from docx.shared import Cm
 import matplotlib.pyplot as plt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # --- NASTAVITVE ---
 USER_NAME = os.environ.get('SLOFIT_USERNAME')
@@ -221,34 +223,59 @@ df_table["Osrednjeslovenska"] = df_centili[df_centili["Geo_enota"] == "Osrednjes
 df_table["Slovenija"] = df_centili[df_centili["Geo_enota"] == "Slovenija"]["CentilXA"].values[:len(df_table)]
 
 # --- USTVARJANJE DOCX ---
-doc = Document()
+doc = Document("template.docx")
 doc.add_heading('Analitično poročilo za meritev Zmigaj se do vadbe', level=1)
+
+p = doc.add_paragraph("")  # prazen odstavek za razmik
+p.paragraph_format.space_after = Pt(12)
+
 doc.add_heading('Osnovni podatki o meritvi', level=2)
 doc.add_paragraph("")
-doc.add_paragraph(f"Datum meritev: {row['Datum']}")
+datum = pd.to_datetime(row["Datum"]).strftime("%d. %m. %Y")
+doc.add_paragraph(f"Datum meritev: {datum}")
 doc.add_paragraph(f"Izvajalec meritev: {row['IzvajalecNaziv']}")
 doc.add_paragraph(f"Administrator: {row['Administrator']}")
 doc.add_paragraph(f"Testna baterija: {row['BaterijaTestovIme']}")
 doc.add_paragraph(f"Regija (za primerjavo): {row['RegijaName']}")
 doc.add_paragraph(f"Število udeležencev ZV: {row['Merjencev']}")
 doc.add_paragraph("")
+doc.add_page_break()
 
 # --- TABELA ---
 doc.add_heading('Povprečni centili po testih', level=2)
 table = doc.add_table(rows=1, cols=len(df_table.columns))
 table.style = 'Table Grid'
+table.autofit = False
 
 # Glava
 hdr_cells = table.rows[0].cells
 for i, col_name in enumerate(df_table.columns):
     hdr_cells[i].text = col_name
+    hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 # Vrstice
 for idx, r in df_table.iterrows():
     row_cells = table.add_row().cells
     for i, col_name in enumerate(df_table.columns):
-        row_cells[i].text = str(round(r[col_name], 2)) if isinstance(r[col_name], (int,float)) else str(r[col_name])
+        val = str(round(r[col_name], 1)) if isinstance(r[col_name], (int, float)) else str(r[col_name])
+        row_cells[i].text = val
 
+        if i == 0:
+            row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+        else:
+            row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+for row in table.rows:
+    for cell in row.cells:
+        for paragraph in cell.paragraphs:
+            paragraph.paragraph_format.keep_together = True
+for row in table.rows:
+    for cell in row.cells:
+        cell.width = Inches(1.2)
+table.columns[0].width = Cm(5.0)
+
+
+for cell in table.columns[0].cells:
+    cell.width = Cm(5.0)
 doc.add_paragraph("")
 
 # --- GRAF ---
@@ -347,64 +374,149 @@ analiza_mejni = df_plot["Analiza_Mejni"]
 
 slo_tvegani = df_plot["Slo_Tvegani"]
 slo_mejni = df_plot["Slo_Mejni"]
-# --- GRAF 2 (STACKED BAR) ---
-plt.figure(figsize=(10,5))
+doc.add_page_break()
+# --- TABELA 2 ---
+doc.add_heading('Delež mejnih in tveganih rezultatov po testih - tabela', level=2)
+
+table2 = doc.add_table(rows=2, cols=7)
+table2.style = 'Table Grid'
+table2.autofit = False
+
+# --- PRVA VRSTICA (GLAVNE SKUPINE) ---
+hdr1 = table2.rows[0].cells
+
+hdr1[0].text = "Test / %"
+hdr1[1].text = "ZmigajSdv"
+hdr1[3].text = "Regija"
+hdr1[5].text = "Slovenija"
+
+# merge celice za skupine
+hdr1[1].merge(hdr1[2])
+hdr1[3].merge(hdr1[4])
+hdr1[5].merge(hdr1[6])
+
+# --- DRUGA VRSTICA (PODSTOLPCI) ---
+hdr2 = table2.rows[1].cells
+
+hdr2[0].text = ""
+
+hdr2[1].text = "Tvegano"
+hdr2[2].text = "Mejno"
+
+hdr2[3].text = "Tvegano"
+hdr2[4].text = "Mejno"
+
+hdr2[5].text = "Tvegano"
+hdr2[6].text = "Mejno"
+
+# poravnava glave
+for row in table2.rows[:2]:
+    for cell in row.cells:
+        for p in cell.paragraphs:
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+# --- PODATKI ---
+for _, r in df_plot.iterrows():
+    row_cells = table2.add_row().cells
+
+    row_cells[0].text = str(r["TestIme"])
+
+    row_cells[1].text = str(round(r["Analiza_Tvegani"], 1))
+    row_cells[2].text = str(round(r["Analiza_Mejni"], 1))
+
+    row_cells[3].text = str(round(r["Regija_Tvegani"], 1))
+    row_cells[4].text = str(round(r["Regija_Mejni"], 1))
+
+    row_cells[5].text = str(round(r["Slo_Tvegani"], 1))
+    row_cells[6].text = str(round(r["Slo_Mejni"], 1))
+
+    # poravnava
+    row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+    for i in range(1, 7):
+        row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+table2.columns[0].width = Cm(5.0)
+
+
+for cell in table2.columns[0].cells:
+    cell.width = Cm(5.0)
+
+# --- GRAF 2 ---
+plt.figure(figsize=(12,6))
 
 positions = list(range(len(testi)))
-width = 0.25
+width = 0.18   # malo ožji stolpci
 
-# --- ANALIZA (levo) ---
-plt.bar([p - width for p in positions],
-        analiza_tvegani,
-        width=width,
-        color='#df3127',
-        label="Tvegano (analiza)")
+offset = 0.25  # večji razmik med stolpci v trojici
 
-plt.bar([p - width for p in positions],
-        analiza_mejni,
-        bottom=analiza_tvegani,
-        width=width,
-        color='#ffd54e',
-        label="Mejno (analiza)")
+# --- ANALIZA ---
+x_analiza = [p - offset for p in positions]
+plt.bar(x_analiza, analiza_tvegani, width=width, color='#df3127')
+plt.bar(x_analiza, analiza_mejni, bottom=analiza_tvegani, width=width, color='#ffd54e')
 
-# --- REGIJA (sredina) ---
-plt.bar(positions,
-        df_plot["Regija_Tvegani"],
-        width=width,
-        color='#df3127',   # rdeča
-        alpha=0.7,
-        label="Tvegano (regija)")
+# --- REGIJA ---
+x_regija = positions
+plt.bar(x_regija, df_plot["Regija_Tvegani"], width=width, color='#df3127')
+plt.bar(x_regija, df_plot["Regija_Mejni"], bottom=df_plot["Regija_Tvegani"], width=width, color='#ffd54e')
 
-plt.bar(positions,
-        df_plot["Regija_Mejni"],
-        bottom=df_plot["Regija_Tvegani"],
-        width=width,
-        color='#ffd54e',   # rumena
-        alpha=0.7,
-        label="Mejno (regija)")
+# --- SLO ---
+x_slo = [p + offset for p in positions]
+plt.bar(x_slo, slo_tvegani, width=width, color='#df3127')
+plt.bar(x_slo, slo_mejni, bottom=slo_tvegani, width=width, color='#ffd54e')
 
-# --- SLOVENIJA (desno) ---
-plt.bar([p + width for p in positions],
-        slo_tvegani,
-        width=width,
-        color='#df3127',   # rdeča
-        alpha=0.4,
-        label="Tvegano (Slovenija)")
+# --- NAVPIČNE ČRTE MED VSAKIM STOLPCEM ---
 
-plt.bar([p + width for p in positions],
-        slo_mejni,
-        bottom=slo_tvegani,
-        width=width,
-        color='#ffd54e',   # rumena
-        alpha=0.4,
-        label="Mejno (Slovenija)")
+all_x = []
+for i in range(len(testi)):
+    all_x.extend([x_analiza[i], x_regija[i], x_slo[i]])
+
+all_x_sorted = sorted(all_x)
+# črta pred prvim stolpcem
+first_line = all_x_sorted[0] - (all_x_sorted[1] - all_x_sorted[0]) / 2
+plt.axvline(first_line, color='black', linewidth=0.5)
+
+# črta za zadnjim stolpcem
+last_line = all_x_sorted[-1] + (all_x_sorted[-1] - all_x_sorted[-2]) / 2
+plt.axvline(last_line, color='black', linewidth=0.5)
+for i in range(len(all_x_sorted) - 1):
+    mid = (all_x_sorted[i] + all_x_sorted[i+1]) / 2
+    plt.axvline(mid, color='black', linewidth=0.5)
+def wrap_labels(labels, width=10):
+    wrapped = []
+    for label in labels:
+        words = str(label).split()
+        lines = []
+        current = ""
+
+        for w in words:
+            if len(current) + len(w) + 1 <= width:
+                current += (" " if current else "") + w
+            else:
+                lines.append(current)
+                current = w
+        if current:
+            lines.append(current)
+
+        wrapped.append("\n".join(lines))
+    return wrapped
+# --- X OZNAKE ---
+wrapped_testi = wrap_labels(testi, width=10)
+
+plt.xticks(positions, wrapped_testi, rotation=0, ha='center')
+
+# pomakni imena testov dol
+ax = plt.gca()
+ax.tick_params(axis='x', pad=25)
+
+# --- OZNAKE STOLPCEV (Z / R / S) ---
+for i in range(len(testi)):
+    plt.text(x_analiza[i], -3, "Z", ha='center', va='top', fontsize=9)
+    plt.text(x_regija[i], -3, "R", ha='center', va='top', fontsize=9)
+    plt.text(x_slo[i], -3, "S", ha='center', va='top', fontsize=9)
 
 # osi
-plt.xticks(positions, testi, rotation=45, ha='right')
 plt.ylabel("Odstotek")
 plt.ylim(0, 100)
 
-plt.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
 plt.tight_layout()
 
 # shrani
@@ -415,6 +527,9 @@ plt.close()
 # dodaj v DOCX
 doc.add_page_break()
 doc.add_heading('Delež mejnih in tveganih rezultatov po testih', level=2)
+doc.add_paragraph("Z...ZmigajSdv")
+doc.add_paragraph("R...Regija")
+doc.add_paragraph("S...Slovenija")
 doc.add_picture(graf2_path, width=Inches(6))
 
 # --- SHRANJEVALNJE DOCX ---
