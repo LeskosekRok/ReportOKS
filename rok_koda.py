@@ -26,6 +26,10 @@ if not PASSWORD:
 file_path = "reportOKSanaliza.xlsx"
 df_analize = pd.read_excel(file_path, sheet_name="Analize")
 df_centili = pd.read_excel(file_path, sheet_name="Centili")
+df_testi = pd.read_excel("reportOKSanaliza_2.xlsx", sheet_name="Testi")
+
+# slovar: ime testa -> vrstni red
+order_map = dict(zip(df_testi["Ime"], df_testi["Order"]))
 
 # --- VNOS ANALIZE ---
 analiza_id = input("Vnesi številko analize (Meritev.id): ")
@@ -47,33 +51,35 @@ SQL_QUERY_1 = f"""
 DECLARE @merID INT  = {Meritev_id}
 DECLARE @regijaID INT = {Regija_id}
 
-SELECT 
+SELECT
     m.Datum,
     im.Naziv AS IzvajalecNaziv,
+    im.Naslov,
     u.PriimekInIme AS Administrator,
     bt.Ime AS BaterijaTestovIme,
     fmr.Name AS RegijaName,
-    (  SELECT COUNT(*)
+    stats.Skupaj AS Merjencev,
+    stats.Nm,
+    stats.Nz,
+    stats.XAstarost
+FROM Meritev m
+    INNER JOIN IzvajalecMeritev im ON im.ID = m.Izvajalec
+    INNER JOIN Uporabnik u ON u.ID = m.IdUporabnik
+    INNER JOIN BaterijaTestov bt ON bt.ID = m.BaterijaTestov
+    INNER JOIN FitnessMapRegions fmr ON fmr.ID = @regijaID
+    CROSS APPLY (
+        SELECT
+            COUNT(*) AS Skupaj,
+            SUM(CASE WHEN c1.Spol = 1 THEN 1 ELSE 0 END) AS Nm,
+            SUM(CASE WHEN c1.Spol = 2 THEN 1 ELSE 0 END) AS Nz,
+            AVG(posameznik.StarostLet) AS XAstarost
         FROM Merjenec m1
         JOIN Clan c1 ON c1.ID = m1.IdClan
-        WHERE m1.IdMeritev = @merID
-          AND EXISTS (
-                SELECT 1
-                FROM Merjenec m2
-                JOIN Meritev me2 ON me2.ID = m2.IdMeritev
-                WHERE m2.IdClan = m1.IdClan
-                  AND me2.BaterijaTestov = 26
-          )
-    ) AS Merjencev
-FROM Meritev m
-    INNER JOIN IzvajalecMeritev im 
-        ON im.ID = m.Izvajalec
-    INNER JOIN Uporabnik u 
-        ON u.ID = m.IdUporabnik
-    INNER JOIN BaterijaTestov bt
-        ON bt.ID = m.BaterijaTestov
-    INNER JOIN FitnessMapRegions fmr
-        ON fmr.ID = @regijaID
+        CROSS APPLY (
+            SELECT CAST(DATEDIFF(day, c1.DatumRojstva, m.Datum) / 365.25 AS FLOAT) AS StarostLet
+        ) AS posameznik
+        WHERE m1.IdMeritev = m.ID
+    ) AS stats
 WHERE m.ID = @merID;
 """
 
@@ -118,6 +124,8 @@ WHERE
 GROUP BY te.Ime
 ORDER BY te.Ime;
 """
+
+
 # --- SELENIUM PRIJAVA ---
 chrome_options = Options()
 # chrome_options.add_argument("--headless")  # Odkomentiraj za headless
@@ -181,6 +189,18 @@ try:
     if df_sql1.empty:
         raise ValueError("SQL poizvedba 1 ni vrnila podatkov.")
     row = df_sql1.iloc[0]
+    kraj = row["Naslov"]
+    st_moski = int(row["Nm"])
+    st_zenske = int(row["Nz"])
+    def fix_starost(val):
+        s = str(val)
+
+        # če je številka sumljivo dolga, popravi decimalno mesto
+        if len(s) > 4:
+            s = s[:2] + "." + s[2:]
+
+        return round(float(s), 1)
+    povp_starost = fix_starost(row["XAstarost"])
 
     # --- SQL 2 ---
     df_sql2 = run_sql_and_get_table(SQL_QUERY_2)
@@ -221,6 +241,9 @@ df_table["ZmigajSdv"] = df_sql2["Povprecje"]
 df_table["Osrednjeslovenska"] = df_centili[df_centili["Geo_enota"] == "Osrednjeslovenska"]["CentilXA"].values[:len(df_table)]
 
 df_table["Slovenija"] = df_centili[df_centili["Geo_enota"] == "Slovenija"]["CentilXA"].values[:len(df_table)]
+df_table["Order"] = df_table["Test"].map(order_map)
+df_table = df_table.sort_values("Order")
+df_table = df_table.drop(columns=["Order"])
 
 # --- USTVARJANJE DOCX ---
 doc = Document("template.docx")
@@ -238,6 +261,10 @@ doc.add_paragraph(f"Administrator: {row['Administrator']}")
 doc.add_paragraph(f"Testna baterija: {row['BaterijaTestovIme']}")
 doc.add_paragraph(f"Regija (za primerjavo): {row['RegijaName']}")
 doc.add_paragraph(f"Število udeležencev ZV: {row['Merjencev']}")
+doc.add_paragraph(f"Kraj meritev: {kraj}")
+doc.add_paragraph(f"Povprečna starost: {str(povp_starost).replace('.', ',')}")
+doc.add_paragraph(f"Število moških: {st_moski}")
+doc.add_paragraph(f"Število žensk: {st_zenske}")
 doc.add_paragraph("")
 doc.add_page_break()
 
@@ -341,7 +368,7 @@ df_cone_slo = df_cone_slo.rename(columns={"Test": "TestIme"})
 df_cone_slo["Slo_Tvegani"] = df_cone_slo.iloc[:, 8] * 100
 df_cone_slo["Slo_Mejni"] = df_cone_slo.iloc[:, 7] * 100
 
-# --- ANALIZA ---
+# --- ANALIZA (Existing code) ---
 df_sql3["Skupaj"] = df_sql3[["Zdravo", "Mejno", "Tvegano"]].sum(axis=1)
 
 df_sql3["Analiza_Tvegani"] = df_sql3.apply(
@@ -365,17 +392,22 @@ df_plot = df_sql3.merge(
     how="left"
 )
 
+# --- KEY FIX: SORT BEFORE ASSIGNING DATA FOR GRAPH ---
+df_plot["Order"] = df_plot["TestIme"].map(order_map)
+df_plot = df_plot.sort_values("Order")
+df_plot = df_plot.drop(columns=["Order"])
 
-# --- PODATKI ZA GRAF ---
+# Now extract the data for the graph from the SORTED dataframe
 testi = df_plot["TestIme"]
-
 analiza_tvegani = df_plot["Analiza_Tvegani"]
 analiza_mejni = df_plot["Analiza_Mejni"]
-
 slo_tvegani = df_plot["Slo_Tvegani"]
 slo_mejni = df_plot["Slo_Mejni"]
+regija_tvegani = df_plot["Regija_Tvegani"] # Added for clarity
+regija_mejni = df_plot["Regija_Mejni"]     # Added for clarity
+
+# --- TABELA 2 (Will now match because df_plot is already sorted) ---
 doc.add_page_break()
-# --- TABELA 2 ---
 doc.add_heading('Delež mejnih in tveganih rezultatov po testih - tabela', level=2)
 
 table2 = doc.add_table(rows=2, cols=7)
@@ -444,21 +476,20 @@ for cell in table2.columns[0].cells:
 plt.figure(figsize=(12,6))
 
 positions = list(range(len(testi)))
-width = 0.18   # malo ožji stolpci
-
-offset = 0.25  # večji razmik med stolpci v trojici
+width = 0.18
+offset = 0.25
 
 # --- ANALIZA ---
 x_analiza = [p - offset for p in positions]
 plt.bar(x_analiza, analiza_tvegani, width=width, color='#df3127')
 plt.bar(x_analiza, analiza_mejni, bottom=analiza_tvegani, width=width, color='#ffd54e')
 
-# --- REGIJA ---
+# --- REGIJA (Updated to use the sorted variables) ---
 x_regija = positions
-plt.bar(x_regija, df_plot["Regija_Tvegani"], width=width, color='#df3127')
-plt.bar(x_regija, df_plot["Regija_Mejni"], bottom=df_plot["Regija_Tvegani"], width=width, color='#ffd54e')
+plt.bar(x_regija, regija_tvegani, width=width, color='#df3127')
+plt.bar(x_regija, regija_mejni, bottom=regija_tvegani, width=width, color='#ffd54e')
 
-# --- SLO ---
+# --- SLO (Updated to use the sorted variables) ---
 x_slo = [p + offset for p in positions]
 plt.bar(x_slo, slo_tvegani, width=width, color='#df3127')
 plt.bar(x_slo, slo_mejni, bottom=slo_tvegani, width=width, color='#ffd54e')
