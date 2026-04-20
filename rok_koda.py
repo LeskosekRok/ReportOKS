@@ -30,6 +30,7 @@ df_testi = pd.read_excel("reportOKSanaliza_2.xlsx", sheet_name="Testi")
 
 # slovar: ime testa -> vrstni red
 order_map = dict(zip(df_testi["Ime"], df_testi["Order"]))
+visji_map = dict(zip(df_testi["Ime"], df_testi["VisjiBoljsi"]))
 
 # --- VNOS ANALIZE ---
 analiza_id = input("Vnesi številko analize (Meritev.id): ")
@@ -244,6 +245,15 @@ df_table["Slovenija"] = df_centili[df_centili["Geo_enota"] == "Slovenija"]["Cent
 df_table["Order"] = df_table["Test"].map(order_map)
 df_table = df_table.sort_values("Order")
 df_table = df_table.drop(columns=["Order"])
+def adjust_value(row, col):
+    visji = visji_map.get(row["Test"], 1)  # default = 1 (višje je boljše)
+    if visji == -1:
+        return 100 - row[col]
+    return row[col]
+
+# popravi vse tri stolpce
+for col in ["ZmigajSdv", "Osrednjeslovenska", "Slovenija"]:
+    df_table[col] = df_table.apply(lambda r: adjust_value(r, col), axis=1)
 
 # --- USTVARJANJE DOCX ---
 doc = Document("template.docx")
@@ -270,9 +280,12 @@ doc.add_page_break()
 
 # --- TABELA ---
 doc.add_heading('Povprečni centili po testih', level=2)
+doc.add_paragraph("Pri testih, pri katerih je nižji rezultat boljši (npr. Tek na 600 m) so centili “obrnjeni” (100-centil), tako da v spodnji tabeli višje povprečje vedno pomeni boljši rezultat.")
 table = doc.add_table(rows=1, cols=len(df_table.columns))
-table.style = 'Table Grid'
-table.autofit = False
+table.style = "Table Grid"
+table.autofit = True
+table.allow_autofit = True
+
 
 # Glava
 hdr_cells = table.rows[0].cells
@@ -306,7 +319,8 @@ for cell in table.columns[0].cells:
 doc.add_paragraph("")
 
 # --- GRAF ---
-plt.figure(figsize=(8,4))
+plt.figure(figsize=(8,5))
+
 
 x = df_table["Test"]
 
@@ -408,11 +422,13 @@ regija_mejni = df_plot["Regija_Mejni"]     # Added for clarity
 
 # --- TABELA 2 (Will now match because df_plot is already sorted) ---
 doc.add_page_break()
-doc.add_heading('Delež mejnih in tveganih rezultatov po testih - tabela', level=2)
+doc.add_heading('Delež mejnih in tveganih rezultatov po testih', level=2)
+doc.add_paragraph("Tabela prikazuje delež udeležencev meritev, ki imajo testni dosežek označen kot tvegan (rdeča cona) ali mejen (rumena cona). Delež zelene cone ni prikazan, se pa lahko izračuna kot razlika 100% - Tvegano – Mejno. ")
 
 table2 = doc.add_table(rows=2, cols=7)
 table2.style = 'Table Grid'
-table2.autofit = False
+table2.autofit = True
+table2.allow_autofit = True
 
 # --- PRVA VRSTICA (GLAVNE SKUPINE) ---
 hdr1 = table2.rows[0].cells
@@ -556,13 +572,8 @@ plt.savefig(graf2_path)
 plt.close()
 
 # dodaj v DOCX
-doc.add_page_break()
-doc.add_heading('Delež mejnih in tveganih rezultatov po testih', level=2)
-doc.add_paragraph("Z...ZmigajSdv")
-doc.add_paragraph("R...Regija")
-doc.add_paragraph("S...Slovenija")
 doc.add_picture(graf2_path, width=Inches(6))
-
+doc.add_paragraph("Oznake skupin: Z=ZmigajSdv, R=Regija, S=Slovenija")
 # --- SHRANJEVALNJE DOCX ---
 docx_filename = os.path.join(os.getcwd(), ReportDocName + ".docx")
 doc.save(docx_filename)
