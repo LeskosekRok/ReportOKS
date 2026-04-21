@@ -246,14 +246,21 @@ df_table["Order"] = df_table["Test"].map(order_map)
 df_table = df_table.sort_values("Order")
 df_table = df_table.drop(columns=["Order"])
 def adjust_value(row, col):
-    visji = visji_map.get(row["Test"], 1)  # default = 1 (višje je boljše)
-    if visji == -1:
+    visji = visji_map.get(row["Test"], 1) 
+    if visji == 0:
         return 100 - row[col]
     return row[col]
 
 # popravi vse tri stolpce
 for col in ["ZmigajSdv", "Osrednjeslovenska", "Slovenija"]:
     df_table[col] = df_table.apply(lambda r: adjust_value(r, col), axis=1)
+def add_star(test):
+    t = str(test).strip()
+    if visji_map.get(t, 1) == 0:
+        return t + "*"
+    return t
+
+df_table["Test"] = df_table["Test"].apply(add_star)
 
 # --- USTVARJANJE DOCX ---
 doc = Document("template.docx")
@@ -267,20 +274,20 @@ doc.add_paragraph("")
 datum = pd.to_datetime(row["Datum"]).strftime("%d. %m. %Y")
 doc.add_paragraph(f"Datum meritev: {datum}")
 doc.add_paragraph(f"Izvajalec meritev: {row['IzvajalecNaziv']}")
+doc.add_paragraph(f"Kraj meritev: {kraj}")
 doc.add_paragraph(f"Administrator: {row['Administrator']}")
 doc.add_paragraph(f"Testna baterija: {row['BaterijaTestovIme']}")
 doc.add_paragraph(f"Regija (za primerjavo): {row['RegijaName']}")
 doc.add_paragraph(f"Število udeležencev ZV: {row['Merjencev']}")
-doc.add_paragraph(f"Kraj meritev: {kraj}")
-doc.add_paragraph(f"Povprečna starost: {str(povp_starost).replace('.', ',')}")
 doc.add_paragraph(f"Število moških: {st_moski}")
 doc.add_paragraph(f"Število žensk: {st_zenske}")
+doc.add_paragraph(f"Povprečna starost: {str(povp_starost).replace('.', ',')}")
 doc.add_paragraph("")
 doc.add_page_break()
 
 # --- TABELA ---
 doc.add_heading('Povprečni centili po testih', level=2)
-doc.add_paragraph("Pri testih, pri katerih je nižji rezultat boljši (npr. Tek na 600 m) so centili “obrnjeni” (100-centil), tako da v spodnji tabeli višje povprečje vedno pomeni boljši rezultat.")
+doc.add_paragraph("Pri testih, pri katerih je zaželen nižji rezultat (npr. 6-minutni test hoje, Obseg pasu) so centili “obrnjeni” (100-centil), tako da v spodnji tabeli in grafikonu višje povprečje vedno pomeni boljši rezultat.")
 table = doc.add_table(rows=1, cols=len(df_table.columns))
 table.style = "Table Grid"
 table.autofit = True
@@ -330,9 +337,9 @@ y3 = df_table["Slovenija"] - 50
 
 positions = list(range(len(x)))
 
-plt.bar([p-0.2 for p in positions], y1, width=0.2, label="ZmigajSdv")
-plt.bar(positions, y2, width=0.2, label="Osrednjeslovenska")
-plt.bar([p+0.2 for p in positions], y3, width=0.2, label="Slovenija")
+plt.bar([p-0.2 for p in positions], y1, width=0.2, label="ZmigajSdv", color='orange')
+plt.bar(positions, y2, width=0.2, label="Osrednjeslovenska", color='#add8e6')  # svetlo modra
+plt.bar([p+0.2 for p in positions], y3, width=0.2, label="Slovenija", color='#00008b')  # temno modra
 
 # OSI
 plt.ylabel("Povprečni centil")
@@ -482,11 +489,15 @@ for _, r in df_plot.iterrows():
     row_cells[0].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
     for i in range(1, 7):
         row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-table2.columns[0].width = Cm(5.0)
-
+table2.columns[0].width = Cm(8.0)
 
 for cell in table2.columns[0].cells:
-    cell.width = Cm(5.0)
+    cell.width = Cm(8.0)
+    for paragraph in cell.paragraphs:
+        paragraph.paragraph_format.keep_together = True
+
+
+
 
 # --- GRAF 2 ---
 plt.figure(figsize=(12,6))
@@ -572,6 +583,7 @@ plt.savefig(graf2_path)
 plt.close()
 
 # dodaj v DOCX
+doc.add_paragraph("\n")
 doc.add_picture(graf2_path, width=Inches(6))
 doc.add_paragraph("Oznake skupin: Z=ZmigajSdv, R=Regija, S=Slovenija")
 # --- SHRANJEVALNJE DOCX ---
