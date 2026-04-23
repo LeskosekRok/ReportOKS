@@ -443,7 +443,14 @@ doc.add_heading('Delež mejnih in tveganih rezultatov po testih', level=2)
 doc.add_paragraph("Tabela prikazuje delež udeležencev meritev, ki imajo testni dosežek označen kot tvegan (rdeča cona) ali mejen (rumena cona). Delež zelene cone ni prikazan, se pa lahko izračuna kot razlika 100% - Tvegano – Mejno. ")
 
 table2 = doc.add_table(rows=2, cols=7)
-table2.style = 'Table Grid'
+if pd.notna(table_style) and str(table_style).strip() != "":
+    try:
+        table2.style = str(table_style)
+    except Exception:
+        print(f"Opozorilo: stil '{table_style}' ne obstaja, uporabljen bo privzeti.")
+        table2.style = 'Table Grid'
+else:
+    table2.style = 'Table Grid'
 table2.autofit = True
 table2.allow_autofit = True
 
