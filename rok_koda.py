@@ -364,10 +364,15 @@ plt.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=3)
 plt.tight_layout()
 
 
-graf_path = os.path.join(os.getcwd(), "graf.png")
-plt.savefig(graf_path)
+from io import BytesIO
+
+image_stream = BytesIO()
+plt.savefig(image_stream, format='png', bbox_inches='tight')
 plt.close()
-doc.add_picture(graf_path, width=Inches(6))
+
+image_stream.seek(0)  # zelo pomembno!
+
+doc.add_picture(image_stream, width=Inches(6))
 
 # --- PREBERI REGIJO ---
 df_regija = pd.read_excel(file_path, sheet_name="Regije")
@@ -514,7 +519,7 @@ for cell in table2.columns[0].cells:
         paragraph.paragraph_format.keep_together = True
 
 
-
+doc.add_paragraph("\n")
 
 # --- GRAF 2 ---
 plt.figure(figsize=(12,6))
@@ -596,12 +601,16 @@ plt.tight_layout()
 
 # shrani
 graf2_path = os.path.join(os.getcwd(), "graf_cone.png")
-plt.savefig(graf2_path)
+image_stream2 = BytesIO()
+plt.savefig(image_stream2, format='png', bbox_inches='tight')
 plt.close()
 
+image_stream2.seek(0)
+
+doc.add_picture(image_stream2, width=Inches(6))
+
 # dodaj v DOCX
-doc.add_paragraph("\n")
-doc.add_picture(graf2_path, width=Inches(6))
+#doc.add_picture(graf2_path, width=Inches(6))
 doc.add_paragraph("Oznake skupin: Z=ZmigajSdv, R=Regija, S=Slovenija")
 # --- SHRANJEVALNJE DOCX ---
 docx_filename = os.path.join(os.getcwd(), ReportDocName + ".docx")
