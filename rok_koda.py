@@ -27,7 +27,7 @@ if not PASSWORD:
 file_path = "reportOKSanaliza.xlsx"
 df_analize = pd.read_excel(file_path, sheet_name="Analize")
 df_centili = pd.read_excel(file_path, sheet_name="Centili")
-df_testi = pd.read_excel("reportOKSanaliza_2.xlsx", sheet_name="Testi")
+df_testi = pd.read_excel(file_path, sheet_name="Testi")
 
 # slovar: ime testa -> vrstni red
 order_map = dict(zip(df_testi["Ime"], df_testi["Order"]))
@@ -241,10 +241,34 @@ df_table = pd.DataFrame()
 df_table["Test"] = df_sql2["TestIme"]
 df_sql2["Povprecje"] = df_sql2["Povprecje"].apply(place_decimal_and_round)
 df_table["ZmigajSdv"] = df_sql2["Povprecje"]
+regija = str(df_sql1.loc[0, 'RegijaName'])
+df_table["Regija"] = df_centili[df_centili["Geo_enota"] == regija]["CentilXA"].values[:len(df_table)]
 
-df_table["Osrednjeslovenska"] = df_centili[df_centili["Geo_enota"] == "Osrednjeslovenska"]["CentilXA"].values[:len(df_table)]
 
 df_table["Slovenija"] = df_centili[df_centili["Geo_enota"] == "Slovenija"]["CentilXA"].values[:len(df_table)]
+df_table["Order"] = df_table["Test"].map(order_map)
+df_table = df_table.sort_values("Order")
+df_table = df_table.drop(columns=["Order"])
+regija_df = (
+    df_centili[df_centili["Geo_enota"] == regija]
+    [["Test", "CentilXA"]]
+    .rename(columns={"CentilXA": "Regija"})
+)
+
+slo_df = (
+    df_centili[df_centili["Geo_enota"] == "Slovenija"]
+    [["Test", "CentilXA"]]
+    .rename(columns={"CentilXA": "Slovenija"})
+)
+
+df_table = pd.DataFrame({
+    "Test": df_sql2["TestIme"],
+    "ZmigajSdv": df_sql2["Povprecje"]
+})
+
+df_table = df_table.merge(regija_df, on="Test", how="left")
+df_table = df_table.merge(slo_df, on="Test", how="left")
+
 df_table["Order"] = df_table["Test"].map(order_map)
 df_table = df_table.sort_values("Order")
 df_table = df_table.drop(columns=["Order"])
@@ -255,7 +279,7 @@ def adjust_value(row, col):
     return row[col]
 
 # popravi vse tri stolpce
-for col in ["ZmigajSdv", "Osrednjeslovenska", "Slovenija"]:
+for col in ["ZmigajSdv", "Regija", "Slovenija"]:
     df_table[col] = df_table.apply(lambda r: adjust_value(r, col), axis=1)
 def add_star(test):
     t = str(test).strip()
@@ -342,13 +366,13 @@ plt.figure(figsize=(8,5))
 x = df_table["Test"]
 
 y1 = df_table["ZmigajSdv"] - 50
-y2 = df_table["Osrednjeslovenska"] - 50
+y2 = df_table["Regija"] - 50
 y3 = df_table["Slovenija"] - 50
 
 positions = list(range(len(x)))
 
 plt.bar([p-0.2 for p in positions], y1, width=0.2, label="ZmigajSdv", color='orange')
-plt.bar(positions, y2, width=0.2, label="Osrednjeslovenska", color='#add8e6')  # svetlo modra
+plt.bar(positions, y2, width=0.2, label="Regija", color='#add8e6')  # svetlo modra
 plt.bar([p+0.2 for p in positions], y3, width=0.2, label="Slovenija", color='#00008b')  # temno modra
 
 # OSI
@@ -428,21 +452,21 @@ df_plot = df_sql3.merge(
     how="left"
 )
 
-# --- KEY FIX: SORT BEFORE ASSIGNING DATA FOR GRAPH ---
+
 df_plot["Order"] = df_plot["TestIme"].map(order_map)
 df_plot = df_plot.sort_values("Order")
 df_plot = df_plot.drop(columns=["Order"])
 
-# Now extract the data for the graph from the SORTED dataframe
+
 testi = df_plot["TestIme"]
 analiza_tvegani = df_plot["Analiza_Tvegani"]
 analiza_mejni = df_plot["Analiza_Mejni"]
 slo_tvegani = df_plot["Slo_Tvegani"]
 slo_mejni = df_plot["Slo_Mejni"]
-regija_tvegani = df_plot["Regija_Tvegani"] # Added for clarity
-regija_mejni = df_plot["Regija_Mejni"]     # Added for clarity
+regija_tvegani = df_plot["Regija_Tvegani"] 
+regija_mejni = df_plot["Regija_Mejni"]     
 
-# --- TABELA 2 (Will now match because df_plot is already sorted) ---
+# --- TABELA 2 ---
 doc.add_page_break()
 doc.add_heading('Delež mejnih in tveganih rezultatov po testih', level=2)
 doc.add_paragraph("Tabela prikazuje delež udeležencev meritev, ki imajo testni dosežek označen kot tvegan (rdeča cona) ali mejen (rumena cona). Delež zelene cone ni prikazan, se pa lahko izračuna kot razlika 100% - Tvegano – Mejno. ")
@@ -533,12 +557,12 @@ x_analiza = [p - offset for p in positions]
 plt.bar(x_analiza, analiza_tvegani, width=width, color='#df3127')
 plt.bar(x_analiza, analiza_mejni, bottom=analiza_tvegani, width=width, color='#ffd54e')
 
-# --- REGIJA (Updated to use the sorted variables) ---
+# --- REGIJA ---
 x_regija = positions
 plt.bar(x_regija, regija_tvegani, width=width, color='#df3127')
 plt.bar(x_regija, regija_mejni, bottom=regija_tvegani, width=width, color='#ffd54e')
 
-# --- SLO (Updated to use the sorted variables) ---
+# --- SLO ---
 x_slo = [p + offset for p in positions]
 plt.bar(x_slo, slo_tvegani, width=width, color='#df3127')
 plt.bar(x_slo, slo_mejni, bottom=slo_tvegani, width=width, color='#ffd54e')
